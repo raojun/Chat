@@ -1,5 +1,8 @@
 #include "widget.h"
 #include "ui_widget.h"
+#include "tcpserver.h"
+#include "tcpclient.h"
+#include <QFileDialog>
 #include <QudpSocket>
 #include <QHostInfo>
 #include <QMessageBox>
@@ -8,6 +11,7 @@
 #include <QNetworkInterface>
 #include <QProcess>
 #include <QPushButton>
+#include <QColorDialog>
 
 Widget::Widget(QWidget *parent) :
     QWidget(parent),
@@ -23,7 +27,15 @@ Widget::Widget(QWidget *parent) :
 
     //退出
     connect(ui->exitButton,SIGNAL(clicked()),this,SLOT(close()));
+
     sendMessage(NewParticipant);//调用sendMessage()函数来广播用户登录信息
+
+    server=new TcpServer(this);//创建服务器类对象
+    connect(server,SIGNAL(sendFileName(QString)),this,SLOT(getFileName(QString)));
+
+    //关联信号和槽
+    connect(ui->messageTextEdit,SIGNAL(currentCharFormatChanged(QTextCharFormat)),
+            this,SLOT(currentFormatChanged(const QTextCharFormat)));
 }
 
 Widget::~Widget()
@@ -56,8 +68,14 @@ void Widget::sendMessage(MessageType type,QString serverAddress)
         case ParticipantLeft:
             break;//离开用户不做任何处理
         case FileName:
+    {
+            int row=ui->userTableWidget->currentRow();
+            QString clientAddress=ui->userTableWidget->item(row,2)->text();//获取当前选中用户的IP
+            out<<address<<clientAddress<<fileName;//将IP和文件名一起写入UDP数据报中
             break;
+    }
         case Refuse:
+            out<<serverAddress;
             break;
     }
 
@@ -96,9 +114,55 @@ void Widget::processPendingDatagrams()
                 participantLeft(userName,localHostName,time);//进行用户离开的处理
                 break;
             case FileName:
+        {
+                in>>userName>>localHostName>>ipAddress;
+                QString clientAddress,fileName;
+                in>>clientAddress>>fileName;
+                hasPendingFlie(userName,ipAddress,clientAddress,fileName);//判断是否接收该文件
                 break;
+        }
             case Refuse:
+                in>>userName>>localHostName;
+                QString serverAddress;
+                in>>serverAddress;
+                QString ipAddress=getIP();
+                //当发送过来拒绝信息时，要判断该程序是否是发送端
+                if(ipAddress==serverAddress)
+                {
+                    server->refused();//若是，则执行服务器的refused()函数
+                }
                 break;
+        }
+    }
+}
+
+//hasPendingFile()函数
+void Widget::hasPendingFlie(QString userName,QString serverAddress,
+                                QString clientAddress,QString fileName)
+{
+    QString ipAddress=getIP();
+    if(ipAddress==clientAddress)
+    {
+        //弹出提示框让用户判断是否接收文件
+        int btn=QMessageBox::information(this,tr("接受文件"),tr("来自%1(%2)的文件：%3,是否接收？")
+                                                .arg(userName).arg(serverAddress).arg(fileName),
+                                                QMessageBox::Yes,QMessageBox::No);
+        if(btn==QMessageBox::Yes)
+        {
+            //若接收，则创建客户端对象来传输文件
+            QString name=QFileDialog::getSaveFileName(0,tr("保存文件"),fileName);
+            if(!name.isEmpty())
+            {
+                TcpClient *client=new TcpClient(this);
+                client->setFileName(name);
+                client->setHostAddress(QHostAddress(serverAddress));
+                client->show();
+            }
+        }
+        else
+        {
+            //若拒绝接收，就发送拒绝信息的UDP广播
+            sendMessage(Refuse,serverAddress);
         }
     }
 }
@@ -185,16 +249,164 @@ QString Widget::getUserName()
 //获取用户输入的聊天信息
 QString Widget::getMessage()
 {
-    QString msg=ui->messageTextEdit->toHtml();//从消息文本编辑器中获取用户输入的聊天信息
+    //从消息文本编辑器中获取用户输入的聊天信息
+    QString msg=ui->messageTextEdit->toHtml();
     ui->messageTextEdit->clear();//将文本编辑器中的内容清空
     ui->messageTextEdit->setFocus();
     return msg;
 }
 
+//getFileName()槽
+void Widget::getFileName(QString name)
+{
+    fileName=name;
+    sendMessage(FileName);
+}
+
+//currentFormatChanged()槽的定义
+void Widget::currentFormatChanged(const QTextCharFormat &format)
+{
+    ui->fontComboBox->setCurrentFont(format.font());
+    //如果字体大小出错，使用12号字体
+    if(format.fontPointSize()<9)
+    {
+        ui->sizeComboBox->setCurrentIndex(3);
+    }
+    else
+    {
+        ui->sizeComboBox->setCurrentIndex(ui->sizeComboBox
+                ->findText(QString::number(format.fontPointSize())));
+    }
+    ui->boldToolBtn->setChecked(format.font().bold());
+    ui->italicToolBtn->setChecked(format.font().italic());
+    ui->underlineToolBtn->setChecked(format.font().underline());
+    color=format.foreground().color();
+}
+
 //发送
-
-
 void Widget::on_sendButton_clicked()
 {
     sendMessage(Message);
+}
+
+
+//传输文件
+void Widget::on_sendToolBtn_clicked()
+{
+    if(ui->userTableWidget->selectedItems().isEmpty())
+    {
+        //现在用户列表中选择一个用户来接收文件
+        QMessageBox::warning(0,tr("选择用户"),
+                            tr("请先从用户列表选择要传送的用户"),QMessageBox::Ok);
+        return;
+    }
+
+    //弹出发送端界面
+    server->show();
+    server->initServer();
+}
+
+//更改字体样式
+void Widget::on_fontComboBox_currentFontChanged(QFont f)
+{
+    ui->messageTextEdit->setCurrentFont(f);
+    ui->messageTextEdit->setFocus();
+}
+
+//更改字体大小
+void Widget::on_sizeComboBox_currentIndexChanged(QString size)
+{
+    ui->messageTextEdit->setFontPointSize(size.toDouble());
+    ui->messageTextEdit->setFocus();
+}
+
+//字体加粗
+void Widget::on_boldToolBtn_clicked(bool checked)
+{
+    if(checked)
+    {
+        ui->messageTextEdit->setFontWeight(QFont::Bold);
+    }
+    else
+    {
+        ui->messageTextEdit->setFontWeight(QFont::Normal);
+    }
+    ui->messageTextEdit->setFocus();
+}
+
+//字体倾斜
+void Widget::on_italicToolBtn_clicked(bool checked)
+{
+    ui->messageTextEdit->setFontItalic(checked);
+    ui->messageTextEdit->setFocus();
+}
+
+//字体下划线
+void Widget::on_underlineToolBtn_clicked(bool checked)
+{
+    ui->messageTextEdit->setFontUnderline(checked);
+    ui->messageTextEdit->setFocus();
+}
+
+//更改字体颜色
+void Widget::on_colorToolBtn_clicked()
+{
+    color = QColorDialog::getColor(color, this);
+    if (color.isValid())
+    {
+        ui->messageTextEdit->setTextColor(color);
+        ui->messageTextEdit->setFocus();
+    }
+}
+
+//保存聊天记录
+void Widget::on_saveToolBtn_clicked()
+{
+    if(ui->messageBrowser->document()->isEmpty())
+    {
+        QMessageBox::warning(0,tr("警告"),tr("聊天记录为空，无法保存！"),QMessageBox::Ok);
+    }
+    else
+    {
+        QString fileName=QFileDialog::getSaveFileName(this,tr("保存聊天记录"),
+                            tr("聊天记录"),tr("文本(*.txt);;All File(*.*"));
+        if(!fileName.isEmpty())
+        {
+            saveFile(fileName);
+        }
+    }
+}
+
+//saveFile()函数的定义
+bool Widget::saveFile(const QString &fileName)
+{
+    QFile file(fileName);
+    if(!file.open(QFile::WriteOnly|QFile::Text))
+    {
+        QMessageBox::warning(this,tr("保存文件"),tr("无法保存文件 %1:\n%2")
+                                    .arg(fileName)
+                                    .arg(file.errorString()));
+        return false;
+    }
+    QTextStream out(&file);
+    out<<ui->messageBrowser->toPlainText();
+    return true;
+}
+
+//删除聊天记录
+void Widget::on_clearToolBtn_clicked()
+{
+    ui->messageBrowser->clear();
+}
+
+// 退出
+void Widget::on_exitButton_clicked()
+{
+    close();
+}
+
+void Widget::closeEvent(QCloseEvent *e)
+{
+    sendMessage(ParticipantLeft);
+    QWidget::closeEvent(e);
 }

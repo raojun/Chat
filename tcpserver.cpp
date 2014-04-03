@@ -17,8 +17,8 @@ TcpServer::TcpServer(QWidget *parent) :
 
     //创建QTcpServer对象进行信号和槽的关联
     tcpPort=6666;
-    tcpserver=new QTcpServer(this);
-    connect(TcpServer,SIGNAL(newConnection()),this,SLOT(sendMessage()));
+    tcpServer=new QTcpServer(this);
+    connect(tcpServer,SIGNAL(newConnection()),this,SLOT(sendMessage()));
 
     initServer();
 }
@@ -42,7 +42,7 @@ void TcpServer::initServer()
 	ui->serverOpenBtn->setEnabled(true);
 	ui->serverSendBtn->setEnabled(false);
 
-	TcpServer->close();//关闭服务器
+    tcpServer->close();//关闭服务器
 }
 
 //sendMessage()槽
@@ -52,7 +52,7 @@ void TcpServer::sendMessage()
 	clientConnection=tcpServer->nextPendingConnection();
 	connect(clientConnection,SIGNAL(bytesWritten(qint64)),this,SLOT(updateClientProgress(qint64)));
 
-	ui->serverStatusLabel->setText(tr("开始传送文件%1！").arg(theFileName));
+    ui->serverStatusLabel->setText(tr("开始传送文件 %1！").arg(thefileName));
 
 	localFile=new QFile(fileName);
 	if(!localFile->open((QFile::ReadOnly)))
@@ -67,10 +67,10 @@ void TcpServer::sendMessage()
 	time.start();//启动计时
 	QString currentFile=fileName.right(fileName.size()-fileName.lastIndexOf('/')-1);
 	sendOut<<qint64(0)<<qint64(0)<<currentFile;
-	TotalBytes++outBlock.size();
+    TotalBytes+=outBlock.size();
 	sendOut.device()->seek(0);
 	sendOut<<TotalBytes<<qint64((outBlock.size()-sizeof(qint64)*2));
-	bytesToWrite=TotalBytes-clientConnect->write(outBlock);
+    bytesToWrite=TotalBytes-clientConnection->write(outBlock);
 	outBlock.resize(0);
 }
 
@@ -87,7 +87,7 @@ void TcpServer::updateClientProgress(qint64 numBytes)
 	}
 	else
 	{
-		localFile->close()
+        localFile->close();
 	}
 
 	ui->progressBar->setMaximum(TotalBytes);
@@ -98,10 +98,10 @@ void TcpServer::updateClientProgress(qint64 numBytes)
 	ui->serverStatusLabel->setText(tr("已发送%1MB(%2MB/s)"
 									"\n共%3MB已用时：%4秒\n估计剩余时间：%5秒")
 									.arg(bytesWritten/(1024*1024))
-									.arg(speed*1000/(1024*1024),0,f,2)
+                                    .arg(speed*1000/(1024*1024),0,'f',2)
 									.arg(TotalBytes/(1024*1024))
-									.arg(useTime/1000,0,f,0)
-									.arg(TotalBytes/speed/1000-useTime/1000,0,f,0));
+                                    .arg(useTime/1000,0,'f',0)
+                                    .arg(TotalBytes/speed/1000-useTime/1000,0,'f',0));
 	if (bytesWritten==TotalBytes)
 	{
 		localFile->close();
@@ -116,12 +116,12 @@ void TcpServer::on_serverOpenBtn_clicked()
 	fileName=QFileDialog::getOpenFileName(this);
 	if (!fileName.isEmpty())
 	{
-		theFileName=fileName.right(fileName.size()-fileName.lastIndexOf('/')-1);
+        thefileName=fileName.right(fileName.size()-fileName.lastIndexOf('/')-1);
 		ui->serverStatusLabel->setText(tr("要传送的文件为：%1").arg(fileName));
 		
 		//选择了要发送的文件后更新按钮状态
 		ui->serverSendBtn->setEnabled(true);
-		ui->serverOpenBtn->setEnabled(false)
+        ui->serverOpenBtn->setEnabled(false);
 	}
 }
 
@@ -131,12 +131,12 @@ void TcpServer::on_serverSendBtn_clicked()
 {
 	if(!tcpServer->listen(QHostAddress::Any,tcpPort))//开始监听
 	{
-		QDebug()<<tcpServer->errorString();
+        qDebug()<<tcpServer->errorString();
 		close();
 		return;
 	}
 	ui->serverStatusLabel->setText(tr("请等待对方接收…………"));
-	emit sendFileName(theFileName);//发送sendFileName()信号
+    emit sendFileName(thefileName);//发送sendFileName()信号
 }
 
 
@@ -150,7 +150,7 @@ void TcpServer::on_serverCloseBtn_clicked()
 		{
 			localFile->close();
 		}
-		clientConnection->about();
+        clientConnection->abort();
 	}
 	close();
 }
